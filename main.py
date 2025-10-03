@@ -1,9 +1,11 @@
 
 import logging
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from config import token
 from data import add_rating, get_average_rating, add_review, get_reviews, record_game_play, get_game_stats
+from ratings import update_player_rating, get_top_players, get_player_rating
 
 # Настройка логирования
 logging.basicConfig(
@@ -64,6 +66,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎮 Выбрать игру", callback_data="hub")],
         [InlineKeyboardButton("🏆 Топ игр", callback_data="top_games")],
+        [InlineKeyboardButton("🥇 Рейтинг игроков", callback_data="ratings")],
+        [InlineKeyboardButton("📊 Мой рейтинг", callback_data="my_rating")],
         [InlineKeyboardButton("⭐ Оценить игры", callback_data="rate_games")],
         [InlineKeyboardButton("💬 Отзывы", callback_data="reviews")],
         [InlineKeyboardButton("💰 Поддержать автора", callback_data="support")],
@@ -220,6 +224,14 @@ async def handle_game_selection(update: Update, context: ContextTypes.DEFAULT_TY
         if game_info["available"]:
             # Записываем статистику игры
             record_game_play(game_key)
+            
+            # Получаем информацию о пользователе
+            user_id = update.effective_user.id
+            username = update.effective_user.username or update.effective_user.first_name or "Аноним"
+            
+            # Сохраняем информацию о текущей игре для обновления рейтинга
+            context.user_data["current_game"] = game_key
+            context.user_data["game_start_time"] = datetime.now().isoformat()
 
             # Получаем рейтинг и отзывы
             rating = get_average_rating(game_key)
@@ -398,6 +410,113 @@ async def show_development_message(update: Update, context: ContextTypes.DEFAULT
 
     await query.edit_message_text(
         dev_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_ratings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать рейтинг игроков"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем топ-10 игроков по общему счету
+    top_players = get_top_players(limit=10)
+    
+    if not top_players:
+        ratings_text = "🏆 **Рейтинг игроков**\n\nПока нет игроков в рейтинге. Станьте первым!"
+    else:
+        ratings_text = "🏆 **Топ-10 игроков**\n\n"
+        
+        for i, player in enumerate(top_players, 1):
+            # Добавляем медаль для первых трех мест
+            medal = ""
+            if i == 1:
+                medal = "🥇 "
+            elif i == 2:
+                medal = "🥈 "
+            elif i == 3:
+                medal = "🥉 "
+            
+            ratings_text += f"{medal}{i}. {player['username']} - {player['score']} очков\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🎮 Игры", callback_data="hub")],
+        [InlineKeyboardButton("🏆 Рейтинг по играм", callback_data="ratings_by_games")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        ratings_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_ratings_by_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать рейтинг игроков по конкретным играм"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Создаем клавиатуру с выбором игр
+    keyboard = []
+    for game_key, game_info in GAMES.items():
+        keyboard.append([InlineKeyboardButton(
+            f"{game_info['emoji']} {game_info['name'].split()[-1]}",
+            callback_data=f"rating_{game_key}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="ratings")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    ratings_text = """
+🏆 **Рейтинг по играм**
+
+Выберите игру, чтобы посмотреть рейтинг игроков:
+"""
+    
+    await query.edit_message_text(
+        ratings_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_game_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать рейтинг для конкретной игры"""
+    query = update.callback_query
+    await query.answer()
+    
+    game_key = query.data.replace("rating_", "")
+    game_info = GAMES[game_key]
+    
+    # Получаем топ-10 игроков для этой игры
+    top_players = get_top_players(limit=10, game=game_key)
+    
+    if not top_players:
+        ratings_text = f"🏆 **Рейтинг: {game_info['name']}**\n\nПока нет игроков в рейтинге. Станьте первым!"
+    else:
+        ratings_text = f"🏆 **Топ-10 игроков: {game_info['name']}**\n\n"
+        
+        for i, player in enumerate(top_players, 1):
+            # Добавляем медаль для первых трех мест
+            medal = ""
+            if i == 1:
+                medal = "🥇 "
+            elif i == 2:
+                medal = "🥈 "
+            elif i == 3:
+                medal = "🥉 "
+            
+            ratings_text += f"{medal}{i}. {player['username']} - {player['score']} очков\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🎮 Играть", callback_data=f"game_{game_key}")],
+        [InlineKeyboardButton("⬅️ Назад к списку игр", callback_data="ratings_by_games")],
+        [InlineKeyboardButton("🏆 Общий рейтинг", callback_data="ratings")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        ratings_text,
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -786,6 +905,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_game_hub(update, context)
     elif data == "top_games":
         await show_top_games(update, context)
+    elif data == "ratings":
+        await show_ratings(update, context)
+    elif data == "my_rating":
+        await show_my_rating(update, context)
+    elif data == "ratings_by_games":
+        await show_ratings_by_games(update, context)
+    elif data.startswith("rating_"):
+        await show_game_rating(update, context)
     elif data == "rate_games":
         await show_rate_games(update, context)
     elif data == "reviews":
@@ -811,14 +938,120 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("game_reviews_"):
         await show_game_reviews(update, context)
 
+async def show_my_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать личный рейтинг игрока"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name or "Аноним"
+    
+    # Получаем рейтинг игрока
+    player_rating = get_player_rating(user_id)
+    
+    if not player_rating:
+        await update.message.reply_text(
+            "🏆 **Ваш рейтинг**\n\nВы еще не играли. Начните игру, чтобы попасть в рейтинг!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎮 Выбрать игру", callback_data="hub")]
+            ]),
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Формируем текст с информацией о рейтинге
+    rating_text = f"🏆 **Ваш рейтинг**\n\n👤 Игрок: {username}\n📊 Общий счет: {player_rating['total_score']} очков\n\n🎮 **Результаты по играм:**\n"
+    
+    # Добавляем информацию по каждой игре
+    for game_key, game_data in player_rating["games"].items():
+        if game_key in GAMES:
+            game_name = GAMES[game_key]["name"]
+            best_score = game_data["best_score"]
+            plays = game_data["plays"]
+            rating_text += f"• {game_name}: лучший результат - {best_score} очков ({plays} игр)\n"
+    
+    # Добавляем дату последнего обновления
+    if "last_updated" in player_rating:
+        from datetime import datetime
+        last_updated = datetime.fromisoformat(player_rating["last_updated"])
+        rating_text += f"\n📅 Последняя игра: {last_updated.strftime('%d.%m.%Y %H:%M')}"
+    
+    # Создаем клавиатуру
+    keyboard = [
+        [InlineKeyboardButton("🏆 Общий рейтинг", callback_data="ratings")],
+        [InlineKeyboardButton("🎮 Играть", callback_data="hub")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        rating_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def handle_game_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик результатов игры"""
+    # Проверяем, что это текстовое сообщение и у пользователя есть активная игра
+    if not update.message or not update.message.text:
+        return
+    
+    if "current_game" not in context.user_data:
+        return
+    
+    try:
+        # Пытаемся извлечь счет из сообщения
+        message_text = update.message.text.lower()
+        score = 0
+        
+        # Ищем различные форматы счетов в сообщении
+        if "счёт" in message_text or "счет" in message_text or "очко" in message_text or "очки" in message_text:
+            # Извлекаем числа из сообщения
+            import re
+            numbers = re.findall(r'\d+', message_text)
+            if numbers:
+                score = int(numbers[0])
+        
+        # Если счет не найден, но есть слова "игра окончена" или "проигрыш"
+        if score == 0 and ("игра окончена" in message_text or "проигрыш" in message_text):
+            score = 0  # Проигрыш
+        
+        # Если счет не найден, но есть слова "победа" или "выигрыш"
+        if score == 0 and ("победа" in message_text or "выигрыш" in message_text):
+            score = 100  # Стандартное значение для победы
+        
+        # Обновляем рейтинг игрока
+        if score > 0 or "игра окончена" in message_text:
+            user_id = update.effective_user.id
+            username = update.effective_user.username or update.effective_user.first_name or "Аноним"
+            game_key = context.user_data["current_game"]
+            
+            update_player_rating(user_id, username, game_key, score)
+            
+            # Отправляем подтверждение
+            await update.message.reply_text(
+                f"✅ Ваш результат в игре {GAMES[game_key]['name']} учтен! "
+                f"Счет: {score} очков. Посмотреть рейтинг: /ratings",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏆 Рейтинг", callback_data="ratings")],
+                    [InlineKeyboardButton("🎮 Играть снова", callback_data=f"game_{game_key}")]
+                ])
+            )
+        
+        # Очищаем информацию о текущей игре
+        context.user_data.pop("current_game", None)
+        context.user_data.pop("game_start_time", None)
+        
+    except Exception as e:
+        logging.error(f"Ошибка при обработке результата игры: {e}")
+
 def main():
     """Запуск бота"""
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("ratings", lambda u, c: show_ratings(u, c)))
+    application.add_handler(CommandHandler("myrating", show_my_rating))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_review_text))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_result))
 
     # Запускаем бота
     print("🎮 Бот 'Хаб Игр' запущен...")
